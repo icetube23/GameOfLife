@@ -11,16 +11,20 @@ namespace GameOfLife
     /// </summary>
     public class GameOfLife : Game
     {
-        GraphicsDeviceManager graphics;
-        SpriteBatch spriteBatch;
-        Texture2D aliveCell;
-        bool[,] activeCells;
-        bool[,] previousCells;
-        int height;
-        int width;
-        bool autoPlay;
-        bool wasPressed;
-        bool wasReleased;
+        private GraphicsDeviceManager graphics;
+        private SpriteBatch spriteBatch;
+        private Texture2D aliveCell;
+        private bool[,] activeCells;
+        private bool[,] previousCells;
+        private int height;
+        private int width;
+        private int offScreenBuffer;
+        private int offsetY;
+        private int offsetX;
+        private int cellSize;
+        private bool autoPlay;
+        private KeyboardState prevKeyboardState;
+        private MouseState prevMouseState;
 
         public GameOfLife()
         {
@@ -36,23 +40,40 @@ namespace GameOfLife
         /// </summary>
         protected override void Initialize()
         {
+            // Set size for a cell
+            cellSize = 16;
+
+            // Set the amount of cells exceeding the screen
+            offScreenBuffer = 60;
+
             // Initialize a 2d texture representing an alive cell
-            Color[] data = new Color[16 * 16];
-            aliveCell = new Texture2D(GraphicsDevice, 16, 16);
+            Color[] data = new Color[cellSize * cellSize];
+            aliveCell = new Texture2D(GraphicsDevice, cellSize, cellSize);
 
             for (int i = 0; i < data.Length; i++)
                 data[i] = Color.White;
             aliveCell.SetData(data);
 
             // Intialize the arrays holding the current state of the board
-            height = Window.ClientBounds.Height / 16;
-            width = Window.ClientBounds.Width / 16;
-            activeCells = new bool[width , height];
-            previousCells = new bool[width , height];
-            RandomFill();
+            // Array bounds exceed the visible screen so the game behaves properly
+            // at the borders of the screen
+            height = Window.ClientBounds.Height / cellSize;
+            width = Window.ClientBounds.Width / cellSize;
+            activeCells = new bool[width + offScreenBuffer, height + offScreenBuffer];
+            previousCells = new bool[width + offScreenBuffer, height + offScreenBuffer];
+
+            // Calculate offsets so the arrays are centered in the screen
+            offsetY = offScreenBuffer / 2;
+            offsetX = offScreenBuffer / 2;
 
             // Set auto play to false
             autoPlay = false;
+
+            // Read first keyboard state
+            prevKeyboardState = Keyboard.GetState();
+
+            // Make mouse visible
+            IsMouseVisible = true;
 
             base.Initialize();
         }
@@ -65,8 +86,6 @@ namespace GameOfLife
         {
             // Create a new SpriteBatch, which can be used to draw textures.
             spriteBatch = new SpriteBatch(GraphicsDevice);
-
-            // TODO: use this.Content to load your game content here
         }
 
         /// <summary>
@@ -85,37 +104,46 @@ namespace GameOfLife
         /// <param name="gameTime">Provides a snapshot of timing values.</param>
         protected override void Update(GameTime gameTime)
         {
-            // Current keyboard state
-            KeyboardState state = Keyboard.GetState();
+            // Get current mouse state
+            MouseState mouseState = Mouse.GetState();
+            int mouseX = mouseState.X / cellSize;
+            int mouseY = mouseState.Y / cellSize;
+
+            // Get current keyboard state
+            KeyboardState keyboardState = Keyboard.GetState();
+
+            // Invert cell if left mouse button is clicked
+            if (mouseState.LeftButton == ButtonState.Pressed && prevMouseState.LeftButton == ButtonState.Released)
+                if (0 <= mouseX && mouseX < width && 0 <= mouseY && mouseY < height)
+                activeCells[mouseX + offsetX, mouseY + offsetY] = !activeCells[mouseX + offsetX, mouseY + offsetY];
 
             // Exit if enter is pressed
-            if (state.IsKeyDown(Keys.Escape))
+            if (keyboardState.IsKeyDown(Keys.Escape))
                 Exit();
 
             // Toggle auto play if space is pressed
-            if (state.IsKeyDown(Keys.Space))
+            if (keyboardState.IsKeyDown(Keys.Space) && prevKeyboardState.IsKeyUp(Keys.Space))
                 autoPlay = !autoPlay;
-            
-            if (state.IsKeyDown(Keys.S))
-            {
-                wasPressed = true;
-                wasReleased = false;
-            }
+
+            // If 'r' is pressed  random fill the board
+            if (keyboardState.IsKeyDown(Keys.R) && prevKeyboardState.IsKeyUp(Keys.R))
+                RandomFill();
+
+            // If 'x' is pressed call kill all cells
+            if (keyboardState.IsKeyDown(Keys.X) && prevKeyboardState.IsKeyUp(Keys.X))
+                Exterminate();
 
             // Update game if auto play is active or 's' is pressed
-            if (autoPlay || (wasPressed && wasReleased))
+            if (autoPlay || (keyboardState.IsKeyDown(Keys.S) && prevKeyboardState.IsKeyUp(Keys.S)))
             {
                 UpdateGame();
                 Thread.Sleep(10);
-                wasPressed = false;
             }
 
-            // If 's' was released set flag to true
-            if (state.IsKeyUp(Keys.S))
-            {
-                wasReleased = true;
-            }
-
+            // Save keyboard and mouse state for the next update
+            prevKeyboardState = keyboardState;
+            prevMouseState = mouseState;
+ 
             base.Update(gameTime);
         }
 
@@ -125,15 +153,13 @@ namespace GameOfLife
         /// <param name="gameTime">Provides a snapshot of timing values.</param>
         protected override void Draw(GameTime gameTime)
         {
-            GraphicsDevice.Clear(Color.Black);
-
-            // TODO: Add your drawing code here
             spriteBatch.Begin();
-            for (int i = 0; i < activeCells.GetLength(0); i++)
+            for (int i = 0; i < width; i++)
             {
-                for (int j = 0; j < activeCells.GetLength(1); j++)
+                for (int j = 0; j < height; j++)
                 {
-                    spriteBatch.Draw(aliveCell, new Vector2(i * 16, j * 16), activeCells[i, j] ? Color.White : Color.Black);
+                    spriteBatch.Draw(aliveCell, new Vector2(i * cellSize, j * cellSize),
+                                     activeCells[i + offsetX, j + offsetY] ? Color.White : Color.Black);
                 }
             }
             spriteBatch.End();
@@ -143,10 +169,11 @@ namespace GameOfLife
 
         private int AliveNeighbours(int x, int y)
         {
+            // Return the amount of living cells next to the given cell
             int neighbours = 0;
-            for (int i = Math.Max(x - 1, 0); i < Math.Min(x + 2, width); i++)
+            for (int i = Math.Max(x - 1, 0); i < Math.Min(x + 2, previousCells.GetLength(0)); i++)
             {
-                for (int j = Math.Max(y - 1, 0); j < Math.Min(y + 2, height); j++)
+                for (int j = Math.Max(y - 1, 0); j < Math.Min(y + 2, previousCells.GetLength(1)); j++)
                 {
                     neighbours += previousCells[i, j] ? 1 : 0;
                 }
@@ -156,43 +183,50 @@ namespace GameOfLife
 
         private void UpdateGame()
         {
+            // Execute a game step according to Conway's rules
             bool[,] temp = activeCells;
             activeCells = previousCells;
             previousCells = temp;
 
-            for (int i = 0; i < width; i++)
+            for (int i = 0; i < activeCells.GetLength(0); i++)
             {
-                for (int j = 0; j < height; j++)
+                for (int j = 0; j < activeCells.GetLength(1); j++)
                 {
                     int neighbours = AliveNeighbours(i, j);
                     if (neighbours < 2)
-                    {
                         activeCells[i, j] = false;
-                    }
                     else if (neighbours > 3)
-                    {
                         activeCells[i, j] = false;
-                    }
                     else if (neighbours == 3)
-                    {
                         activeCells[i, j] = true;
-                    }
                     else
-                    {
                         activeCells[i, j] = previousCells[i, j];
-                    }
                 }
             }
         }
 
         private void RandomFill()
         {
+            // Random fill the board with living cells
             Random random = new Random();
             for (int i = 0; i < activeCells.GetLength(0); i++)
             {
                 for (int j = 0; j < activeCells.GetLength(1); j++)
                 {
-                    activeCells[i, j] = random.NextDouble() < 0.5;
+                    if (random.NextDouble() < 0.5)
+                        activeCells[i, j] = true;
+                }
+            }
+        }
+
+        private void Exterminate()
+        {
+            // Kill every cell
+            for (int i = 0; i < activeCells.GetLength(0); i++)
+            {
+                for (int j = 0; j < activeCells.GetLength(1); j++)
+                {
+                    activeCells[i, j] = false;
                 }
             }
         }
